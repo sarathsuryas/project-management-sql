@@ -101,10 +101,45 @@ $ npm run db:migrate -- --name add_users
 `npm run db:migrate` chains `prisma generate` for you, because Prisma 7 no
 longer regenerates the client automatically.
 
-### Tests
+## API
 
-`test/app.e2e-spec.ts` boots the real `AppModule`, so the e2e suite connects to
-whatever `DATABASE_URL` points at and will fail if the database is unreachable.
+All request bodies are validated by a global `ValidationPipe` registered as
+`APP_PIPE` in `AppModule` (`whitelist`, `forbidNonWhitelisted`, `transform`).
+Unknown fields are rejected with `400` rather than silently stripped.
+
+| Method | Path | Body / Query | Success | Failures |
+| ------ | ---- | ------------ | ------- | -------- |
+| `POST` | `/projects` | `{ name, description?, status? }` | `201` | `400` invalid · `409` duplicate name |
+| `GET` | `/projects` | `?status=ACTIVE` | `200` | `400` bad status |
+| `GET` | `/projects/:id` | — | `200` | `400` non-numeric id · `404` |
+| `PATCH` | `/projects/:id` | partial of the create body | `200` | `400` · `404` · `409` name taken |
+| `DELETE` | `/projects/:id` | — | `204` | `400` · `404` |
+
+`:id` runs through `ParseIntPipe`, so `/projects/abc` is a `400` before any query
+is issued.
+
+### Project model
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `id` | `Int` | auto-increment primary key |
+| `name` | `String` | required, unique, 1–200 chars |
+| `description` | `String?` | optional, max 2000 chars |
+| `status` | enum | `ACTIVE` (default) / `COMPLETED` / `ARCHIVED` |
+| `createdAt` | `DateTime` | set by the database |
+| `updatedAt` | `DateTime` | maintained by Prisma |
+
+Stored in the `projects` table, with a `ProjectStatus` Postgres enum.
+
+### Status codes you might not expect
+
+- `409` on a duplicate `name` comes from an explicit `findFirst` pre-check in
+  `ProjectsService`, not from catching Prisma's `P2002`. There is a small window
+  where two concurrent inserts of the same name could still surface a `500`.
+- `404` on `PATCH`/`DELETE` comes from an explicit `findOne` existence check, not
+  from catching Prisma's `P2025`.
+- No global Prisma error mapping exists. Any other constraint or driver failure
+  still surfaces as a `500`.
 
 ## Project setup
 
@@ -123,19 +158,6 @@ $ npm run start:dev
 
 # production mode
 $ npm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
 ```
 
 ## Deployment
